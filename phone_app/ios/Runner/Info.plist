@@ -7,12 +7,14 @@
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Need Bluetooth permission for connecting to the necklace device</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Need location permission for Bluetooth scanning</string>
+	<string>This app needs access to location when open to scan for Bluetooth devices.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app needs access to photo library to save captured images.</string>
 	
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Phone App</string>
+	<string>Necklace</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
