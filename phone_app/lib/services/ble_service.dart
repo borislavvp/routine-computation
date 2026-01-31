@@ -155,63 +155,6 @@ class BLEService {
                   print("Image complete");
                 }
               }
-              // print(value);
-              // print(value.length);
-              // return;
-              // _rxBuffer.addAll(value);
-              // _processRxBuffer();
-              // ---------------- HEADER ----------------
-              // if (!receivingImage && value.length == 8) {
-              //   final byteData =
-              //       ByteData.sublistView(Uint8List.fromList(value));
-
-              //   final imageSize = byteData.getUint32(0, Endian.little);
-              //   expectedPackets = byteData.getUint32(4, Endian.little);
-
-              //   packetBuffer.clear();
-              //   receivedPackets = 0;
-              //   receivingImage = true;
-
-              //   print(
-              //       "Image start: $imageSize bytes, $expectedPackets packets");
-
-              //   return;
-              // } else if (receivingImage && value.length > 6) {
-              //   final seq = (value[0] << 8) | value[1];
-              //   final payload = Uint8List.fromList(value.sublist(2));
-
-              //   if (!packetBuffer.containsKey(seq)) {
-              //     packetBuffer[seq] = payload;
-              //     receivedPackets++;
-              //   }
-
-              //   if (receivedPackets % 20 == 0) {
-              //     print("Received $receivedPackets / $expectedPackets packets");
-              //   }
-
-              //   return;
-              // } else {
-              //   print("ARER");
-              //   final builder = BytesBuilder(copy: false);
-              //   for (int i = 0; i < expectedPackets; i++) {
-              //     final chunk = packetBuffer[i];
-              //     if (chunk == null) {
-              //       print("❌ Missing packet $i");
-              //       // receivingImage = false;
-              //       // packetBuffer.clear();
-              //       // return;
-              //     } else {
-              //       builder.add(chunk);
-              //     }
-              //   }
-
-              //   final imageBytes = builder.toBytes();
-
-              //   _imageStreamController.add(imageBytes);
-              //   receivingImage = false;
-              //   packetBuffer.clear();
-              //   return;
-              // }
             });
           } else if (characteristic.uuid.toString() ==
               AUDIO_CHARACTERISTIC_UUID) {
@@ -224,66 +167,6 @@ class BLEService {
     } catch (e) {
       print('Error connecting to device: $e');
       rethrow;
-    }
-  }
-
-  void _processRxBuffer() {
-    while (true) {
-      if (_rxBuffer.length < 2) return;
-
-      final frameLen = _rxBuffer[0] | (_rxBuffer[1] << 8);
-      if (_rxBuffer.length < frameLen + 2) return;
-
-      final frame = _rxBuffer.sublist(2, 2 + frameLen);
-      _rxBuffer.removeRange(0, 2 + frameLen);
-
-      _handleFrame(frame);
-    }
-  }
-
-  void _handleFrame(List<int> frame) {
-    final type = frame[0];
-
-    if (type == 0x01) {
-      final bd = ByteData.sublistView(Uint8List.fromList(frame));
-      final imageSize = bd.getUint32(1, Endian.little);
-      expectedPackets = bd.getUint32(5, Endian.little);
-      packetBuffer.clear();
-      receivingImage = true;
-
-      print("Image start: $imageSize bytes, $expectedPackets packets");
-      return;
-    }
-
-    if (type == 0x02 && receivingImage) {
-      final seq = (frame[1] << 8) | frame[2];
-      final len = (frame[3] << 8) | frame[4];
-      packetBuffer[seq] = Uint8List.fromList(frame.sublist(5, 5 + len));
-
-      if (packetBuffer.length % 20 == 0) {
-        print("Received ${packetBuffer.length} / $expectedPackets");
-      }
-      return;
-    }
-
-    if (type == 0x03 && receivingImage) {
-      final builder = BytesBuilder(copy: false);
-
-      for (int i = 0; i < expectedPackets; i++) {
-        final chunk = packetBuffer[i];
-        if (chunk == null) {
-          print("❌ Missing packet $i");
-          return;
-        }
-        builder.add(chunk);
-      }
-
-      final imageBytes = builder.toBytes();
-      _imageStreamController.add(imageBytes);
-
-      receivingImage = false;
-      packetBuffer.clear();
-      print("✅ Image complete");
     }
   }
 
@@ -310,6 +193,10 @@ class BLEService {
       print('Error sending command: $e');
       rethrow;
     }
+  }
+
+  Future<void> transferSdImages() async {
+    await sendCommand('START_SD_TRANSFER');
   }
 
   Future<void> takePhoto() async {
