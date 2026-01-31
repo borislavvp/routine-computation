@@ -29,6 +29,6 @@ extern camera_config_t config;
 
 // Function declarations
 bool initCamera();
-void capturePhoto(camera_fb_t **fb);
+camera_fb_t* capturePhoto();
 
 #endif 

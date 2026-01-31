@@ -1,82 +1,226 @@
 #include "ble_transfer.h"
+#include "audio_handler.h"
+#include "camera_config.h"
+#include "sd_card.h"
 
-BLEServer* pServer = NULL;
-BLECharacteristic* pCharacteristic = NULL;
+BLEServer *pServer = nullptr;
+BLECharacteristic *pCameraCharacteristic = nullptr;
+BLECharacteristic *pAudioCharacteristic = nullptr;
+
 bool deviceConnected = false;
 
-class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
-      deviceConnected = true;
-      Serial.println("Device connected");
-    };
+/* ================= LED ================= */
 
-    void onDisconnect(BLEServer* pServer) {
-      deviceConnected = false;
-      Serial.println("Device disconnected");
-    }
+void blink()
+{
+  digitalWrite(LED_BUILTIN, LOW);
+  delay(100);
+  digitalWrite(LED_BUILTIN, HIGH);
+}
+
+/* ================= IMAGE TX STATE ================= */
+
+static const int IMAGE_CHUNK_SIZE = 180;
+
+static uint8_t *imageBuf = nullptr;
+static size_t imageLen = 0;
+static size_t imageOffset = 0;
+
+static bool sendingImage = false;
+static bool headerSent = false;
+static bool waitingAck = false;
+
+static uint16_t imageSeq = 0;
+static uint16_t totalPackets = 0;
+volatile bool cameraCommandPending = false;
+
+/* ================= BLE CALLBACKS ================= */
+
+class MyServerCallbacks : public BLEServerCallbacks
+{
+  void onConnect(BLEServer *pServer) override
+  {
+    deviceConnected = true;
+    Serial.println("BLE connected");
+    blink();
+  }
+
+  void onDisconnect(BLEServer *pServer) override
+  {
+    deviceConnected = false;
+    Serial.println("BLE disconnected");
+    BLEDevice::startAdvertising();
+  }
 };
 
-bool initBLE() {
-  // Initialize BLE
-  BLEDevice::init("ESP32-Camera");
-  
-  // Create the BLE Server
+class MyCallbacks : public BLECharacteristicCallbacks
+{
+  void onWrite(BLECharacteristic *pCharacteristic) override
+  {
+    String value = pCharacteristic->getValue();
+
+    if (value == "START_CAMERA")
+    {
+      cameraCommandPending = true;
+      Serial.println("Camera command received");
+    }
+
+    if (value.startsWith("ACK:"))
+    {
+      uint16_t ackSeq = value.substring(4).toInt();
+      Serial.printf("Received ACK for sequence %d, waiting for %d;\n", ackSeq, imageSeq);
+      if (ackSeq == imageSeq || ackSeq == 0xFFFF)
+      {
+        Serial.printf("Packet %d ACK received, moving to %d\n", ackSeq, imageSeq);
+        waitingAck = false;
+      }
+    }
+  }
+};
+
+void initBLE()
+{
+  BLEDevice::init("XIAO_ESP32S3");
+  BLEDevice::setMTU(247);
+
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 
-  // Create the BLE Service
   BLEService *pService = pServer->createService(SERVICE_UUID);
 
-  // Create a BLE Characteristic
-  pCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_UUID,
-                      BLECharacteristic::PROPERTY_READ   |
-                      BLECharacteristic::PROPERTY_WRITE  |
-                      BLECharacteristic::PROPERTY_NOTIFY
-                    );
+  pCameraCharacteristic = pService->createCharacteristic(
+      CAMERA_CHARACTERISTIC_UUID,
+      BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR |
+          BLECharacteristic::PROPERTY_NOTIFY);
 
-  // Add a descriptor
-  pCharacteristic->addDescriptor(new BLE2902());
+  pAudioCharacteristic = pService->createCharacteristic(
+      AUDIO_CHARACTERISTIC_UUID,
+      BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE |
+          BLECharacteristic::PROPERTY_NOTIFY);
 
-  // Start the service
+  pCameraCharacteristic->addDescriptor(new BLE2902());
+  pAudioCharacteristic->addDescriptor(new BLE2902());
+
+  pCameraCharacteristic->setCallbacks(new MyCallbacks());
+  pAudioCharacteristic->setCallbacks(new MyCallbacks());
+
   pService->start();
 
-  // Start advertising
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
   pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06);  // functions that help with iPhone connections issue
+  pAdvertising->setMinPreferred(0x06);
   pAdvertising->setMinPreferred(0x12);
   BLEDevice::startAdvertising();
-  
-  Serial.println("BLE device ready to be connected");
-  return true;
+
+  Serial.println("BLE ready");
 }
 
-void sendImageViaBLE(camera_fb_t *fb) {
-  if (!deviceConnected) {
-    Serial.println("No device connected");
+/* ================= BLE CALLBACK ================= */
+
+/* ================= IMAGE SEND ================= */
+
+void startImageSend(camera_fb_t *fb)
+{
+  if (!deviceConnected || !fb)
+    return;
+
+  imageBuf = fb->buf;
+  imageLen = fb->len;
+  imageOffset = 0;
+  imageSeq = 0;
+
+  totalPackets = (imageLen + IMAGE_CHUNK_SIZE - 1) / IMAGE_CHUNK_SIZE;
+
+  sendingImage = true;
+  headerSent = false;
+  waitingAck = false;
+
+  Serial.printf("Begin image TX (%d bytes, %d packets)\n",
+                imageLen, totalPackets);
+}
+
+void processImageSend()
+{
+  if (!sendingImage || !deviceConnected || waitingAck)
+    return;
+
+  /* -------- send header -------- */
+  if (!headerSent)
+  {
+    uint8_t header[8];
+    header[0] = 0xFF;
+    header[1] = 0xFF;
+    memcpy(header + 2, &imageLen, 4);
+    memcpy(header + 6, &totalPackets, 2);
+
+    pCameraCharacteristic->setValue(header, sizeof(header));
+    pCameraCharacteristic->notify();
+
+    headerSent = true;
+    waitingAck = true;
     return;
   }
 
-  // Send image size first
-  uint32_t imageSize = fb->len;
-  pCharacteristic->setValue((uint8_t*)&imageSize, sizeof(imageSize));
-  pCharacteristic->notify();
-  delay(100);
+  /* -------- send data packet -------- */
+  if (imageSeq < totalPackets)
+  {
+    
+    size_t len = min((size_t)IMAGE_CHUNK_SIZE,
+                     imageLen - imageOffset);
+    if (imageSeq == totalPackets - 1) {
+      // last packet: send all remaining bytes
+      len = imageLen - imageOffset;
+    }
+    uint8_t packet[2 + IMAGE_CHUNK_SIZE];
+    packet[0] = imageSeq >> 8;
+    packet[1] = imageSeq & 0xFF;
+    memcpy(packet + 2, imageBuf + imageOffset, len);
 
-  // Send image data in chunks
-  const int chunkSize = 512;  // BLE packet size
-  for (int i = 0; i < fb->len; i += chunkSize) {
-    int currentChunkSize = min(chunkSize, (int)(fb->len - i));
-    pCharacteristic->setValue(&fb->buf[i], currentChunkSize);
-    pCharacteristic->notify();
-    delay(20);  // Small delay between chunks
+    pCameraCharacteristic->setValue(packet, len + 2);
+    pCameraCharacteristic->notify();
+
+    imageOffset += len;
+    waitingAck = true;
+
+    Serial.printf("Sent packet %d / %d\n",
+                  imageSeq + 1, totalPackets);
+    imageSeq++;
   }
-  
-  Serial.println("Image sent via BLE");
+
+  if (imageSeq >= totalPackets)
+  {
+    sendingImage = false;
+    Serial.println("Image TX complete");
+    delay(50);
+    blink();
+  }
 }
 
-bool isDeviceConnected() {
+
+void sendAudioViaBLE(uint8_t *data, size_t length)
+{
+  if (!deviceConnected)
+    return;
+
+  uint32_t size = length;
+  pAudioCharacteristic->setValue((uint8_t *)&size, sizeof(size));
+  pAudioCharacteristic->notify();
+  delay(10);
+
+  const int chunkSize = 244;
+  for (size_t i = 0; i < length; i += chunkSize)
+  {
+    size_t len = min((size_t)chunkSize, length - i);
+    pAudioCharacteristic->setValue(data + i, len);
+    pAudioCharacteristic->notify();
+    delay(5);
+  }
+}
+
+/* ================= HELPERS ================= */
+
+bool isDeviceConnected()
+{
   return deviceConnected;
-} 
+}

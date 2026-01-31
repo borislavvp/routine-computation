@@ -2,5 +2,16 @@
     "C_Cpp.errorSquiggles": "disabled",
     "files.associations": {
         "ostream": "cpp"
-    }
+    },
+    "editor.formatOnSave": true,
+    "editor.formatOnType": true,
+    "editor.rulers": [80],
+    "editor.selectionHighlight": false,
+    "editor.suggest.snippetsPreventQuickSuggestions": false,
+    "editor.suggestSelection": "first",
+    "editor.tabCompletion": "onlySnippets",
+    "editor.wordBasedSuggestions": "off",
+    "files.autoSave": "afterDelay",
+    "files.autoSaveDelay": 1000,
+    "dart.hotReloadOnSave": "all"
 }

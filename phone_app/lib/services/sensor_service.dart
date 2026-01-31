@@ -19,7 +19,7 @@ class SensorService {
   Stream<MagnetometerEvent> get magnetometerStream => _magnetometerController.stream;
   Stream<MotionData> get motionStream => _motionController.stream;
 
-  // Stream subscriptions
+  // Stream subscriptions       
   StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
   StreamSubscription<GyroscopeEvent>? _gyroscopeSubscription;
   StreamSubscription<MagnetometerEvent>? _magnetometerSubscription;

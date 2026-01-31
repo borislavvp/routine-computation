@@ -1,105 +1,103 @@
-#include "imu_handler.h"
-#include "ble_transfer.h"
+// #include "imu_handler.h"
+// #include "ble_transfer.h"
 
-IMUData recordBuffer[RECORD_BUFFER_SIZE];
-int recordIndex = 0;
-bool recording = false;
-unsigned long lastIMURead = 0;
-const int IMU_READ_INTERVAL = 10; // 100Hz sampling rate
+// static MPU6050 imu;
+// static bool recording = false;
+// static IMUData recordedData[RECORD_BUFFER_SIZE];
+// static int recordIndex = 0;
+// static TaskHandle_t recordTaskHandle = NULL;
 
-bool initIMU() {
-    Wire.begin();
-    if (!IMU.begin()) {
-        Serial.println("Failed to find BMI270 chip");
-        return false;
-    }
+// bool initIMU() {
+//     Wire.begin();
+//     imu.initialize();
+//     delay(10);
 
-    // Configure BMI270
-    IMU.setAccelRange(BMI270_ACCEL_RANGE_2G);
-    IMU.setGyroRange(BMI270_GYRO_RANGE_250);
-    IMU.setAccelODR(BMI270_ACCEL_ODR_100HZ);
-    IMU.setGyroODR(BMI270_GYRO_ODR_100HZ);
+//     // Set MPU6050 Offset Calibration 
+//     imu.setXAccelOffset(-4732);
+//     imu.setYAccelOffset(4703);
+//     imu.setZAccelOffset(8867);
+//     imu.setXGyroOffset(61);
+//     imu.setYGyroOffset(-73);
+//     imu.setZGyroOffset(35);
+
+//     imu.setFullScaleAccelRange(ACC_RANGE);
+
+//     return true;
+// }
+
+// void readIMUData(IMUData* data) {
+//     int16_t ax, ay, az;
+//     int16_t gx, gy, gz;
     
-    Serial.println("BMI270 initialized successfully");
-    return true;
-}
-
-void readIMUData(IMUData* data) {
-    float ax, ay, az, gx, gy, gz;
+//     imu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
     
-    // Read accelerometer data
-    IMU.readAcceleration(ax, ay, az);
-    data->accelX = ax;
-    data->accelY = ay;
-    data->accelZ = az;
+//     // Convert to m/s² and rad/s
+//     data->accelX = ax * CONVERT_G_TO_MS2;
+//     data->accelY = ay * CONVERT_G_TO_MS2;
+//     data->accelZ = az * CONVERT_G_TO_MS2;
     
-    // Read gyroscope data
-    IMU.readGyroscope(gx, gy, gz);
-    data->gyroX = gx;
-    data->gyroY = gy;
-    data->gyroZ = gz;
+//     // Convert to rad/s (MPU6050 sensitivity is 131 LSB/(deg/s))
+//     data->gyroX = gx / 131.0f * (PI / 180.0f);
+//     data->gyroY = gy / 131.0f * (PI / 180.0f);
+//     data->gyroZ = gz / 131.0f * (PI / 180.0f);
     
-    data->timestamp = millis();
-}
+//     data->timestamp = millis();
+// }
 
-void startRecording() {
-    recording = true;
-    recordIndex = 0;
-    Serial.println("Started recording IMU data");
-}
+// void recordTask(void *parameter) {
+//     while (recording && recordIndex < RECORD_BUFFER_SIZE) {
+//         readIMUData(&recordedData[recordIndex]);
+//         recordIndex++;
+//         delay(10); // 100Hz sampling rate
+//     }
+//     recording = false;
+//     vTaskDelete(NULL);
+// }
 
-void stopRecording() {
-    recording = false;
-    Serial.println("Stopped recording IMU data");
-}
+// void startRecording() {
+//     if (!recording) {
+//         recording = true;
+//         recordIndex = 0;
+//         xTaskCreate(recordTask, "RecordTask", 4096, NULL, 1, &recordTaskHandle);
+//     }
+// }
 
-bool isRecording() {
-    return recording;
-}
+// void stopRecording() {
+//     recording = false;
+//     if (recordTaskHandle != NULL) {
+//         vTaskDelete(recordTaskHandle);
+//         recordTaskHandle = NULL;
+//     }
+// }
 
-void sendIMUDataViaBLE(const IMUData* data) {
-    if (!isDeviceConnected()) return;
+// bool isRecording() {
+//     return recording;
+// }
+
+// void sendIMUDataViaBLE(const IMUData* data) {
+//     // Send data via BLE
+//     uint8_t buffer[28]; // 6 floats (4 bytes each) + 1 timestamp (4 bytes)
+//     memcpy(buffer, &data->accelX, 4);
+//     memcpy(buffer + 4, &data->accelY, 4);
+//     memcpy(buffer + 8, &data->accelZ, 4);
+//     memcpy(buffer + 12, &data->gyroX, 4);
+//     memcpy(buffer + 16, &data->gyroY, 4);
+//     memcpy(buffer + 20, &data->gyroZ, 4);
+//     memcpy(buffer + 24, &data->timestamp, 4);
     
-    // Create a buffer for the IMU data
-    uint8_t buffer[sizeof(IMUData)];
-    memcpy(buffer, data, sizeof(IMUData));
-    
-    // Send the data via BLE
-    sendDataViaBLE(buffer, sizeof(IMUData));
-}
+//     // Send via BLE characteristic
+//     // TODO: Implement BLE sending
+// }
 
-void sendRecordedDataViaBLE() {
-    if (!isDeviceConnected()) return;
-    
-    // Send each recorded data point
-    for (int i = 0; i < recordIndex; i++) {
-        sendIMUDataViaBLE(&recordBuffer[i]);
-        delay(10); // Small delay to prevent BLE buffer overflow
-    }
-    
-    Serial.printf("Sent %d IMU data points\n", recordIndex);
-}
+// void sendRecordedDataViaBLE() {
+//     for (int i = 0; i < recordIndex; i++) {
+//         sendIMUDataViaBLE(&recordedData[i]);
+//         delay(10); // Small delay to prevent BLE buffer overflow
+//     }
+// }
 
-void updateIMU() {
-    unsigned long currentTime = millis();
-    if (currentTime - lastIMURead >= IMU_READ_INTERVAL) {
-        lastIMURead = currentTime;
-        
-        IMUData currentData;
-        readIMUData(&currentData);
-        
-        // If recording, store the data
-        if (recording && recordIndex < RECORD_BUFFER_SIZE) {
-            recordBuffer[recordIndex++] = currentData;
-            
-            // If buffer is full, stop recording
-            if (recordIndex >= RECORD_BUFFER_SIZE) {
-                stopRecording();
-                sendRecordedDataViaBLE();
-            }
-        }
-        
-        // Always send current IMU data
-        sendIMUDataViaBLE(&currentData);
-    }
-} 
+// void updateIMU() {
+//     IMUData data;
+//     readIMUData(&data);
+//     sendIMUDataViaBLE(&data);
+// } 

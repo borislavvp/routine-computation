@@ -23,13 +23,15 @@ class _HomeScreenState extends State<HomeScreen> {
   final SensorService _sensorService = SensorService();
   final IMUFusionService _imuFusionService = IMUFusionService();
 
+  final List<int> _incomingBuffer = [];
+
   bool _isScanning = false;
   bool _isConnected = false;
   String _behaviorState = "Not connected";
   List<ScanResult> _scanResults = [];
   BluetoothDevice? _connectedDevice;
   Uint8List? _currentImageData;
-  List<int> _incomingBuffer = [];
+  String currentImagePath = '';
   bool _isReceivingImage = false;
 
   @override
@@ -40,9 +42,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _setTestImageData() {
-    final hexString =
-        '''FF D8 FF E0 00 10 4A 46 49 46 00 01 01 01 00 00 00 00 00 00 
-FF DB 00 43 00 0C 08 09 0B 09 08 0C 0B 0A 0B 0E 0D 0C 0E 12 
+    final hexString = '''
+FF D8 FF E0 00 10 4A 46 49 46 00 01 01 01 00 00 00 00 00 00 FF DB 00 43 00 0C 08 09 0B 09 08 0C 0B 0A 0B 0E 0D 0C 0E 12 
 1E 14 12 11 11 12 25 1A 1C 16 1E 2C 26 2E 2D 2B 26 2A 29 30 
 36 45 3B 30 33 41 34 29 2A 3C 52 3D 41 47 4A 4D 4E 4D 2F 3A 
 55 5B 54 4B 5A 45 4C 4D 4A FF DB 00 43 01 0D 0E 0E 12 10 12 
@@ -957,32 +958,38 @@ A6 02 D2 52 B8 05 25 02 16 92 98 C2 96 81 0E A5 A0 0F FF D9
     });
 
     _bleService.imageStream.listen((data) {
-      for (int i = 0; i < data.length; i++) {
-        int byte = data[i];
-
-        // Detect Start of Image
-        if (!_isReceivingImage &&
-            i + 1 < data.length &&
-            data[i] == 0xFF &&
-            data[i + 1] == 0xD8) {
-          _incomingBuffer.clear();
-          _isReceivingImage = true;
-        }
-
-        if (_isReceivingImage) {
-          _incomingBuffer.add(byte);
-
-          // Detect End of Image
-          int len = _incomingBuffer.length;
-          if (len >= 2 &&
-              _incomingBuffer[len - 2] == 0xFF &&
-              _incomingBuffer[len - 1] == 0xD9) {
-            _handleCompleteImage(Uint8List.fromList(_incomingBuffer));
-            _isReceivingImage = false;
-            _incomingBuffer.clear();
-          }
-        }
+      if (data.length > 0) {
+        print(data);
+        _handleCompleteImage(data);
       }
+      // // Start receiving if not already
+      // if (!_isReceivingImage) {
+      //   _incomingBuffer.clear();
+      //   _isReceivingImage = true;
+      // }
+
+      // // Append all bytes in this chunk
+
+      // // Check last two bytes for end marker
+      // if (data.first == -1) {
+      //   print(_incomingBuffer);
+      //   // Full image received
+      //   _handleCompleteImage(Uint8List.fromList(_incomingBuffer));
+      //   // final cleaned =
+      //   //     _incomingBuffer.join(" ").replaceAll(RegExp(r'[^0-9a-fA-F]'), '');
+      //   // final length = cleaned.length;
+      //   // final bytes = Uint8List(length ~/ 2);
+      //   // for (int i = 0; i < length; i += 2) {
+      //   //   bytes[i ~/ 2] = int.parse(cleaned.substring(i, i + 2), radix: 16);
+      //   // }
+      //   // _handleCompleteImage(Uint8List.fromList(bytes));
+
+      //   // Reset for next image
+      //   _incomingBuffer.clear();
+      //   _isReceivingImage = false;
+      // } else {
+      //   _incomingBuffer.addAll(data);
+      // }
     });
   }
 
@@ -990,7 +997,6 @@ A6 02 D2 52 B8 05 25 02 16 92 98 C2 96 81 0E A5 A0 0F FF D9
     setState(() {
       _currentImageData = imageData;
     });
-
     try {
       if (Platform.isAndroid) {
         // Request storage permission for Android
@@ -1042,8 +1048,27 @@ A6 02 D2 52 B8 05 25 02 16 92 98 C2 96 81 0E A5 A0 0F FF D9
       final file = File('${directory.path}/image_$timestamp.jpg');
 
       // Write the image data to the file
-      await file.writeAsBytes(imageData);
+      try {
+        await file.writeAsBytes(
+          imageData,
+          flush: true,
+          mode: FileMode.write,
+        );
 
+        final size = await file.length();
+        if (size != imageData.length) {
+          throw Exception('Incomplete write: $size / ${imageData.length}');
+        }
+
+        print('Image saved OK: $size bytes');
+      } catch (e) {
+        print('Error saving image: $e');
+      }
+      for (int i = 0; i < imageData.length - 1; i++) {
+          if (imageData[i] == 0xFF) {
+            print('Marker at $i: 0xFF 0x${imageData[i+1].toRadixString(16)}');
+          }
+        }
       // Show success message
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1051,6 +1076,7 @@ A6 02 D2 52 B8 05 25 02 16 92 98 C2 96 81 0E A5 A0 0F FF D9
           duration: const Duration(seconds: 3),
         ),
       );
+      currentImagePath = file.path;
     } catch (e) {
       _showError("Failed to save image: $e");
     }
@@ -1119,7 +1145,7 @@ A6 02 D2 52 B8 05 25 02 16 92 98 C2 96 81 0E A5 A0 0F FF D9
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Necklace App'),
+        title: const Text('Necklace 1.0'),
         actions: [
           if (_isConnected)
             IconButton(
@@ -1182,8 +1208,8 @@ A6 02 D2 52 B8 05 25 02 16 92 98 C2 96 81 0E A5 A0 0F FF D9
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: ImageDisplay(
-              imageData: _currentImageData!,
-            ),
+                // imageData: _currentImageData!,
+                imagePath: currentImagePath),
           ),
 
           // Control Buttons

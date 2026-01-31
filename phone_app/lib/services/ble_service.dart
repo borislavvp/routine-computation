@@ -18,7 +18,12 @@ class BLEService {
 
   BluetoothDevice? _device;
   BluetoothCharacteristic? _commandCharacteristic;
-
+  bool receivingImage = false;
+  int expectedPackets = 0;
+  int receivedPackets = 0;
+  final List<int> _rxBuffer = [];
+  final Map<int, Uint8List> packetBuffer = {};
+  int imageSize = 0;
   final StreamController<Uint8List> _imageStreamController =
       StreamController<Uint8List>.broadcast();
   Stream<Uint8List> get imageStream => _imageStreamController.stream;
@@ -82,23 +87,131 @@ class BLEService {
       _device = device;
       await device.connect();
       _isConnected = true;
-
       // Discover services
       List<BluetoothService> services = await device.discoverServices();
-
       for (var service in services) {
         for (var characteristic in service.characteristics) {
           if (characteristic.uuid.toString() == CAMERA_CHARACTERISTIC_UUID) {
             _commandCharacteristic = characteristic;
             await characteristic.setNotifyValue(true);
-            characteristic.onValueReceived.listen((value) {
+            characteristic.onValueReceived.listen((value) async {
               // Convert the received value to a hex string
-              final hexString = value
-                  .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
-                  .join(' ');
-              // Parse the hex string and convert to bytes
-              final imageBytes = _parseHexImageData(hexString);
-              _imageStreamController.add(imageBytes);
+              // print(value);
+              if (value.isEmpty) return;
+
+              // -------- HEADER --------
+              if (!receivingImage &&
+                  value.length == 8 &&
+                  value[0] == 0xFF &&
+                  value[1] == 0xFF) {
+                final data = ByteData.sublistView(Uint8List.fromList(value));
+                imageSize = data.getUint32(2, Endian.little);
+                expectedPackets = data.getUint16(6, Endian.little);
+
+                packetBuffer.clear();
+                receivingImage = true;
+
+                await characteristic.write(
+                  utf8.encode("ACK:0"),
+                  withoutResponse: true,
+                );
+
+                print(
+                    "Image start: $imageSize bytes, $expectedPackets packets");
+                return;
+              }
+
+              // -------- DATA --------
+              if (receivingImage && value.length > 2) {
+                final seq = (value[0] << 8) | value[1];
+                final payload = Uint8List.fromList(value.sublist(2));
+
+                packetBuffer[seq] = payload;
+                final int ackN = seq + 1;
+                print("SEND ACK");
+                print(ackN);
+                await characteristic.write(
+                  utf8.encode("ACK:$ackN"),
+                );
+                bool allPacketsReceived = true;
+                for (int i = 0; i < expectedPackets; i++) {
+                  if (!packetBuffer.containsKey(i)) {
+                    allPacketsReceived = false;
+                    break;
+                  }
+                }
+                if (allPacketsReceived) {
+                  final builder = BytesBuilder();
+                  for (int i = 0; i < expectedPackets; i++) {
+                    builder.add(packetBuffer[i]!);
+                  }
+
+                  final imageBytes = builder.toBytes();
+                  _imageStreamController.add( Uint8List.fromList([...imageBytes, 0xFF, 0xD9]));
+
+                  receivingImage = false;
+                  packetBuffer.clear();
+
+                  print("Image complete");
+                }
+              }
+              // print(value);
+              // print(value.length);
+              // return;
+              // _rxBuffer.addAll(value);
+              // _processRxBuffer();
+              // ---------------- HEADER ----------------
+              // if (!receivingImage && value.length == 8) {
+              //   final byteData =
+              //       ByteData.sublistView(Uint8List.fromList(value));
+
+              //   final imageSize = byteData.getUint32(0, Endian.little);
+              //   expectedPackets = byteData.getUint32(4, Endian.little);
+
+              //   packetBuffer.clear();
+              //   receivedPackets = 0;
+              //   receivingImage = true;
+
+              //   print(
+              //       "Image start: $imageSize bytes, $expectedPackets packets");
+
+              //   return;
+              // } else if (receivingImage && value.length > 6) {
+              //   final seq = (value[0] << 8) | value[1];
+              //   final payload = Uint8List.fromList(value.sublist(2));
+
+              //   if (!packetBuffer.containsKey(seq)) {
+              //     packetBuffer[seq] = payload;
+              //     receivedPackets++;
+              //   }
+
+              //   if (receivedPackets % 20 == 0) {
+              //     print("Received $receivedPackets / $expectedPackets packets");
+              //   }
+
+              //   return;
+              // } else {
+              //   print("ARER");
+              //   final builder = BytesBuilder(copy: false);
+              //   for (int i = 0; i < expectedPackets; i++) {
+              //     final chunk = packetBuffer[i];
+              //     if (chunk == null) {
+              //       print("❌ Missing packet $i");
+              //       // receivingImage = false;
+              //       // packetBuffer.clear();
+              //       // return;
+              //     } else {
+              //       builder.add(chunk);
+              //     }
+              //   }
+
+              //   final imageBytes = builder.toBytes();
+
+              //   _imageStreamController.add(imageBytes);
+              //   receivingImage = false;
+              //   packetBuffer.clear();
+              //   return;
+              // }
             });
           } else if (characteristic.uuid.toString() ==
               AUDIO_CHARACTERISTIC_UUID) {
@@ -111,6 +224,66 @@ class BLEService {
     } catch (e) {
       print('Error connecting to device: $e');
       rethrow;
+    }
+  }
+
+  void _processRxBuffer() {
+    while (true) {
+      if (_rxBuffer.length < 2) return;
+
+      final frameLen = _rxBuffer[0] | (_rxBuffer[1] << 8);
+      if (_rxBuffer.length < frameLen + 2) return;
+
+      final frame = _rxBuffer.sublist(2, 2 + frameLen);
+      _rxBuffer.removeRange(0, 2 + frameLen);
+
+      _handleFrame(frame);
+    }
+  }
+
+  void _handleFrame(List<int> frame) {
+    final type = frame[0];
+
+    if (type == 0x01) {
+      final bd = ByteData.sublistView(Uint8List.fromList(frame));
+      final imageSize = bd.getUint32(1, Endian.little);
+      expectedPackets = bd.getUint32(5, Endian.little);
+      packetBuffer.clear();
+      receivingImage = true;
+
+      print("Image start: $imageSize bytes, $expectedPackets packets");
+      return;
+    }
+
+    if (type == 0x02 && receivingImage) {
+      final seq = (frame[1] << 8) | frame[2];
+      final len = (frame[3] << 8) | frame[4];
+      packetBuffer[seq] = Uint8List.fromList(frame.sublist(5, 5 + len));
+
+      if (packetBuffer.length % 20 == 0) {
+        print("Received ${packetBuffer.length} / $expectedPackets");
+      }
+      return;
+    }
+
+    if (type == 0x03 && receivingImage) {
+      final builder = BytesBuilder(copy: false);
+
+      for (int i = 0; i < expectedPackets; i++) {
+        final chunk = packetBuffer[i];
+        if (chunk == null) {
+          print("❌ Missing packet $i");
+          return;
+        }
+        builder.add(chunk);
+      }
+
+      final imageBytes = builder.toBytes();
+      _imageStreamController.add(imageBytes);
+
+      receivingImage = false;
+      packetBuffer.clear();
+      print("✅ Image complete");
     }
   }
 

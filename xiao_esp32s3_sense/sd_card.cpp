@@ -1,26 +1,36 @@
 #include "sd_card.h"
 #include "esp_camera.h"
 
-bool initSDCard() {
-  if(!SD.begin(21)) {
+bool initSDCard()
+{
+  if (!SD.begin(21))
+  {
     Serial.println("Card Mount Failed");
     return false;
   }
 
   uint8_t cardType = SD.cardType();
-  if(cardType == CARD_NONE) {
+  if (cardType == CARD_NONE)
+  {
     Serial.println("No SD card attached");
     return false;
   }
 
   Serial.print("SD Card Type: ");
-  if(cardType == CARD_MMC) {
+  if (cardType == CARD_MMC)
+  {
     Serial.println("MMC");
-  } else if(cardType == CARD_SD) {
+  }
+  else if (cardType == CARD_SD)
+  {
     Serial.println("SDSC");
-  } else if(cardType == CARD_SDHC) {
+  }
+  else if (cardType == CARD_SDHC)
+  {
     Serial.println("SDHC");
-  } else {
+  }
+  else
+  {
     Serial.println("UNKNOWN");
   }
 
@@ -30,38 +40,48 @@ bool initSDCard() {
   return true;
 }
 
-void writeFile(fs::FS &fs, const char * path, uint8_t * data, size_t len) {
-  Serial.printf("Writing file: %s\n", path);
+void writeFile(fs::FS &fs, const char *path, uint8_t *data, size_t len)
+{
+  // Serial.printf("Writing file: %s\n", path);
 
   File file = fs.open(path, FILE_WRITE);
-  if(!file) {
+  if (!file)
+  {
     Serial.println("Failed to open file for writing");
     return;
   }
-  if(file.write(data, len) == len) {
+  if (file.write(data, len) == len)
+  {
     Serial.println("File written");
-  } else {
+  }
+  else
+  {
     Serial.println("Write failed");
   }
   file.close();
 }
 
-void listFiles(fs::FS &fs, const char * dirname) {
+void listFiles(fs::FS &fs, const char *dirname)
+{
   Serial.printf("Listing directory: %s\n", dirname);
 
   File root = fs.open(dirname);
-  if(!root) {
+  if (!root)
+  {
     Serial.println("Failed to open directory");
     return;
   }
-  if(!root.isDirectory()) {
+  if (!root.isDirectory())
+  {
     Serial.println("Not a directory");
     return;
   }
 
   File file = root.openNextFile();
-  while(file) {
-    if(!file.isDirectory()) {
+  while (file)
+  {
+    if (!file.isDirectory())
+    {
       Serial.print("  FILE: ");
       Serial.print(file.name());
       Serial.print("  SIZE: ");
@@ -71,15 +91,8 @@ void listFiles(fs::FS &fs, const char * dirname) {
   }
 }
 
-void savePhoto(const char * fileName) {
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Failed to get camera frame buffer");
-    return;
-  }
-  
+void savePhoto(const char *fileName, camera_fb_t *fb)
+{
   writeFile(SD, fileName, fb->buf, fb->len);
-  esp_camera_fb_return(fb);
-  
-  Serial.println("Photo saved to file");
-} 
+  // Serial.println("Photo saved to file");
+}
